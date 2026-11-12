@@ -170,6 +170,20 @@ int Copy(void* output, std::uint32_t* length, const void* value, std::uint32_t s
 
 }
 
+bool TakePendingError(std::uintptr_t native, SocketOptionState& state, int& error) {
+    int pending = 0;
+    socklen_t size = sizeof(pending);
+    if (::getsockopt(static_cast<NativeHandle>(native), SOL_SOCKET, SO_ERROR, reinterpret_cast<NativeOptionOutput>(&pending), &size)) return false;
+#ifdef _WIN32
+    if (pending != 0 && pending == state.reportedError) pending = 0;
+    else if (pending != 0) state.reportedError = pending;
+#else
+    static_cast<void>(state);
+#endif
+    error = pending == 0 ? 0 : GuestErrorFromHost(pending);
+    return true;
+}
+
 int SendBufferSize(SocketOptionState& state, int family, int type) {
     EnsureBuffers(state, family, type);
     return state.sendBuffer;
@@ -328,14 +342,7 @@ int GetSocketLevelOption(std::uintptr_t native, SocketOptionState& state, int fa
     } else if (option == GuestNonBlocking) {
         number = state.nonblocking ? GuestNonBlockingState : 0;
     } else if (option == GuestError) {
-        int pending = 0;
-        socklen_t size = sizeof(pending);
-        if (::getsockopt(handle, SOL_SOCKET, SO_ERROR, reinterpret_cast<NativeOptionOutput>(&pending), &size)) return HostError();
-#ifdef _WIN32
-        if (pending != 0 && pending == state.reportedError) pending = 0;
-        else if (pending != 0) state.reportedError = pending;
-#endif
-        number = pending == 0 ? 0 : GuestErrorFromHost(pending);
+        if (!TakePendingError(native, state, number)) return HostError();
     } else if (option == GuestSendBuffer || option == GuestReceiveBuffer || option == GuestSendLowWater || option == GuestReceiveLowWater) {
         EnsureBuffers(state, family, type);
         number = option == GuestSendBuffer ? state.sendBuffer : option == GuestReceiveBuffer ? state.receiveBuffer

@@ -534,7 +534,72 @@ static void CheckPointerFaults() {
     }
 }
 
+static void CheckDatagramOverSendBuffer(int family) {
+    constexpr int SolSocket = 0xffff;
+    constexpr int SendBuffer = 0x1001;
+    constexpr int NoSignal = 0x20000;
+    constexpr int MessageTooLong = 40;
+    constexpr std::uint64_t limit = 9216;
+    static char datagram[0x8000];
+    static char received[0x8000];
+    std::memset(datagram, 'd', sizeof(datagram));
+    const std::uint32_t addressSize = family == 2 ? 16 : 28;
+    const int receiver = socket_nid_postfix(family, 2, 0);
+    if (receiver < 0 && family == 28 && *__error_nid_postfix() == 47) return;
+    Require(receiver >= 0);
+    std::array<unsigned char, 28> destination{};
+    destination[0] = static_cast<unsigned char>(addressSize);
+    destination[1] = static_cast<unsigned char>(family);
+    if (family == 2) { destination[4] = 127; destination[7] = 1; }
+    else destination[23] = 1;
+    if (bind_nid_postfix(receiver, destination.data(), addressSize) != 0) {
+        Require(family == 28 && *__error_nid_postfix() == 49 && close_nid_postfix(receiver) == 0);
+        return;
+    }
+    std::uint32_t size = destination.size();
+    Require(getsockname_nid_postfix(receiver, destination.data(), &size) == 0 && size == addressSize);
+    Require(fcntl_nid_postfix(receiver, 4, 4) == 0);
+    const int sender = socket_nid_postfix(family, 2, 0);
+    Require(sender >= 0);
+    int buffer = 0;
+    std::uint32_t bufferSize = sizeof(buffer);
+    Require(getsockopt_nid_postfix(sender, SolSocket, SendBuffer, &buffer, &bufferSize) == 0 && buffer == static_cast<int>(limit));
+    Require(send_nid_postfix(sender, datagram, limit + 1, 0) == -1 && *__error_nid_postfix() == 39);
+    Require(sendto_nid_postfix(sender, datagram, limit + 1, 0, destination.data(), addressSize) == -1 && *__error_nid_postfix() == MessageTooLong);
+    Require(sendto_nid_postfix(sender, nullptr, limit + 1, 0, destination.data(), addressSize) == -1 && *__error_nid_postfix() == MessageTooLong);
+    Require(sendto_nid_postfix(sender, datagram, limit, 0, destination.data(), addressSize) == static_cast<std::int64_t>(limit));
+    std::int64_t got = -1;
+    for (int i = 0; i < 1000 && got < 0; ++i) {
+        got = recv_nid_postfix(receiver, received, sizeof(received), 0);
+        if (got < 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(got == static_cast<std::int64_t>(limit));
+    Require(connect_nid_postfix(sender, destination.data(), addressSize) == 0);
+    Require(send_nid_postfix(sender, datagram, limit + 1, 0) == -1 && *__error_nid_postfix() == MessageTooLong);
+    Require(write_nid_postfix(sender, datagram, limit + 1) == -1 && *__error_nid_postfix() == MessageTooLong);
+    KernelIovec pieces[2]{{datagram, 1}, {datagram + 1, static_cast<std::size_t>(limit)}};
+    GuestMsghdr message{nullptr, 0, pieces, 2, nullptr, 0, 0};
+    Require(sendmsg_nid_postfix(sender, &message, 0) == -1 && *__error_nid_postfix() == MessageTooLong);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    Require(recv_nid_postfix(receiver, received, sizeof(received), 0) == -1 && *__error_nid_postfix() == 35);
+    const int larger = static_cast<int>(limit) * 2;
+    Require(setsockopt_nid_postfix(sender, SolSocket, SendBuffer, &larger, sizeof(larger)) == 0);
+    Require(send_nid_postfix(sender, datagram, limit + 1, 0) == static_cast<std::int64_t>(limit + 1));
+    got = -1;
+    for (int i = 0; i < 1000 && got < 0; ++i) {
+        got = recv_nid_postfix(receiver, received, sizeof(received), 0);
+        if (got < 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    Require(got == static_cast<std::int64_t>(limit + 1) && std::memcmp(received, datagram, static_cast<std::size_t>(got)) == 0);
+    Require(send_nid_postfix(sender, datagram, static_cast<std::uint64_t>(larger) + 1, 0) == -1 && *__error_nid_postfix() == MessageTooLong);
+    Require(shutdown_nid_postfix(sender, 1) == 0);
+    Require(send_nid_postfix(sender, datagram, static_cast<std::uint64_t>(larger) + 1, NoSignal) == -1 && *__error_nid_postfix() == 32);
+    Require(close_nid_postfix(sender) == 0 && close_nid_postfix(receiver) == 0);
+}
+
 int main() {
+    CheckDatagramOverSendBuffer(2);
+    CheckDatagramOverSendBuffer(28);
     CheckPointerFaults();
     CheckAddressLengths(2);
     CheckAddressLengths(28);
